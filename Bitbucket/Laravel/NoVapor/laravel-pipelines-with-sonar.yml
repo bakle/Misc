@@ -1,0 +1,97 @@
+image: laravelphp/vapor:php80
+
+clone:
+  depth: full
+
+definitions:
+  caches:
+    composer: vendor
+    sonar: ~/.sonar/cache
+    node: node_modules
+  services:
+    mysql:
+      image: mysql:5.7
+      environment:
+        MYSQL_DATABASE: "database_name"
+        MYSQL_ROOT_PASSWORD: "admin"
+        MYSQL_USER: "database-user"
+        MYSQL_PASSWORD: "database-password"
+    docker:
+      memory: 2048
+
+  steps:
+    - step: &code-checking
+        name: Lint and CS check
+        script:
+          - export COMPOSER_AUTH="{\"bitbucket-oauth\":{\"bitbucket.org\":{\"consumer-key\":\"$BITBUCKET_CONSUMER_KEY\",\"consumer-secret\":\"$BITBUCKET_CONSUMER_SECRET\"}}}"
+          - apk add --update nodejs nodejs-npm
+          - npm install --no-interaction && npm run lint-check
+          - composer install --no-interaction
+          - composer php-cs-check
+        caches:
+          - composer
+          - node
+    - step: &parallel-feature-test
+        name: Run feature tests
+        artifacts:
+          - tests/coverage/covs/feature.cov
+        script:
+          - cp .env.pipelines .env.testing
+          - composer config github-oauth.github.com $GITHUB_TOKEN
+          - php -d pcov.enabled=1 -d pcov.directory=. -d pcov.exclude="~vendor~"
+          - php artisan test --parallel --testsuite=Feature --stop-on-failure --coverage-php ./tests/coverage/covs/feature.cov
+        services:
+          - mysql
+        caches:
+          - composer
+    - step: &parallel-unit-test
+        name: Run unit tests
+        artifacts:
+          - tests/coverage/covs/unit.cov
+        script:
+          - cp .env.pipelines .env.testing
+          - composer config github-oauth.github.com $GITHUB_TOKEN
+          - php -d pcov.enabled=1 -d pcov.directory=. -d pcov.exclude="~vendor~"
+          - php artisan test --parallel --testsuite=Unit --runner=WrapperRunner --stop-on-failure --coverage-php ./tests/coverage/covs/unit.cov
+        services:
+          - mysql
+        caches:
+          - composer    
+    - step: &sonarcloud-scan
+        name: Analyze on SonarCloud merged coverage
+        caches:
+          - sonar
+        script:
+          - wget https://phar.phpunit.de/phpcov.phar
+          - php phpcov.phar merge --clover ./tests/coverage/coverage.xml ./tests/coverage/covs
+          - pipe: sonarsource/sonarcloud-scan:1.2.0
+    - step: &sonarcloud-check-quality-gate
+        name: Check the Quality Gate on SonarCloud
+        caches:
+          - sonar
+        script:
+          - pipe: sonarsource/sonarcloud-quality-gate:0.1.4    
+pipelines:
+  branches:
+    develop:
+      - step: *code-checking
+      - parallel:
+          - step: *parallel-feature-test
+          - step: *parallel-unit-test
+      - step: *sonarcloud-scan
+      - step: *sonarcloud-check-quality-gate
+    master:
+      - step: *code-checking
+      - parallel:
+          - step: *parallel-feature-test
+          - step: *parallel-unit-test
+      - step: *sonarcloud-scan
+      - step: *sonarcloud-check-quality-gate
+  pull-requests:
+    '**':
+      - step: *code-checking
+      - parallel:
+          - step: *parallel-feature-test
+          - step: *parallel-unit-test
+      - step: *sonarcloud-scan
+      - step: *sonarcloud-check-quality-gate
