@@ -1,0 +1,6 @@
+{
+    "scripts": {
+        "php-cs-fixer": "vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.php",
+        "php-cs-check": "vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.php -v --dry-run --stop-on-violation --using-cache=no"
+    }
+}
